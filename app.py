@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify, make_response, render_template, redirect
 from config import Config
-from database import db, User
+from database import db, User, Message
+from socket_events import socketio
 from functools import wraps
 import jwt
 from datetime import datetime, timedelta
@@ -12,12 +13,22 @@ def create_app():
     # Initialize Flask-SQLAlchemy
     db.init_app(app)
     
+    # Initialize Socket.IO
+    socketio.init_app(app, cors_allowed_origins="*")
+    
     # Create tables within app context
     with app.app_context():
-        # Drop all tables first
-        db.drop_all()
-        # Then create all tables
         db.create_all()
+
+    # Add login page route
+    @app.route('/login')
+    def login_page():
+        return render_template('login.html')
+
+    # Add root route that redirects to login if not authenticated
+    @app.route('/')
+    def index():
+        return redirect('/login')
 
     def token_required(f):
         @wraps(f)
@@ -122,8 +133,31 @@ def create_app():
             }
         }), 200
 
+    # Add a new route to get user conversations
+    @app.route('/conversations/<username>', methods=['GET'])
+    @token_required
+    def get_conversation(current_user, username):
+        other_user = User.find_by_username(username)
+        if not other_user:
+            return jsonify({'message': 'User not found'}), 404
+        
+        messages = Message.get_conversation(current_user.id, other_user.id)
+        conversation = [{
+            'id': msg.id,
+            'content': msg.content,
+            'sender_username': msg.sender.username,
+            'receiver_username': msg.receiver.username,
+            'created_at': msg.created_at.isoformat()
+        } for msg in messages]
+        
+        return jsonify({'messages': conversation}), 200
+
+    @app.route('/chat')
+    def chat_page():
+        return render_template('chat.html')
+
     return app
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True)
+    socketio.run(app, debug=True)

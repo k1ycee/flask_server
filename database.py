@@ -4,8 +4,13 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy import or_
 from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
+from cryptography.fernet import Fernet
+import base64
 
 db = SQLAlchemy()
+
+encryption_key = Fernet.generate_key()
+cipher_suite = Fernet(encryption_key)
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -17,9 +22,13 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationships
-    white_games = db.relationship('Game', backref='white_player', foreign_keys='Game.white_player_id', lazy=True)
-    black_games = db.relationship('Game', backref='black_player', foreign_keys='Game.black_player_id', lazy=True)
+    # Modified relationships without backrefs
+    sent_messages = db.relationship('Message', 
+                                  foreign_keys='Message.sender_id',
+                                  backref=db.backref('sender', lazy=True))
+    received_messages = db.relationship('Message',
+                                      foreign_keys='Message.receiver_id',
+                                      backref=db.backref('receiver', lazy=True))
 
     @property
     def password(self):
@@ -126,3 +135,32 @@ class Game(db.Model):
 
     def __repr__(self):
         return f"<Game {self.id} - {self.white_player.username} vs {self.black_player.username}>"
+
+class Message(db.Model):
+    __tablename__ = 'messages'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    encrypted_content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Remove the explicit relationship definitions here since they're handled by the backrefs
+    
+    @property
+    def content(self):
+        """Decrypt the message content"""
+        return cipher_suite.decrypt(self.encrypted_content.encode()).decode()
+    
+    @content.setter
+    def content(self, value):
+        """Encrypt the message content"""
+        self.encrypted_content = cipher_suite.encrypt(value.encode()).decode()
+    
+    @classmethod
+    def get_conversation(cls, user1_id, user2_id, limit=50):
+        """Get conversation between two users"""
+        return cls.query.filter(
+            ((cls.sender_id == user1_id) & (cls.receiver_id == user2_id)) |
+            ((cls.sender_id == user2_id) & (cls.receiver_id == user1_id))
+        ).order_by(cls.created_at.desc()).limit(limit).all()

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        #chat {
+            display: none; /* Hide initially */
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+        }
+        #messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        input {
+            padding: 5px;
+            margin: 5px;
+            width: 200px;
+        }
+        button {
+            padding: 5px 10px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat">
+        <h2>Chat</h2>
+        <div id="messages"></div>
+        <input type="text" id="receiver" placeholder="Recipient username">
+        <input type="text" id="message" placeholder="Type your message">
+        <button onclick="sendMessage()">Send</button>
+        <button onclick="logout()">Logout</button>
+    </div>
+
+    <script>
+        // Check authentication first
+        async function checkAuth() {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                const response = await fetch('/auth/user', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error('Authentication failed');
+                }
+
+                // If auth successful, show chat and initialize socket
+                document.getElementById('chat').style.display = 'block';
+                initializeSocket(token);
+
+            } catch (error) {
+                console.error('Auth error:', error);
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+            }
+        }
+
+        function initializeSocket(token) {
+            const socket = io('http://localhost:5000', {
+                query: { token: token }
+            });
+
+            socket.on('connect', () => {
+                console.log('Connected to WebSocket');
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('Socket connection error:', error);
+                if (error.message === 'unauthorized') {
+                    localStorage.removeItem('token');
+                    window.location.href = '/login';
+                }
+            });
+
+            socket.on('new_message', (data) => {
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML += `<p><strong>${data.sender_username}:</strong> ${data.content}</p>`;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            });
+
+            socket.on('error', (data) => {
+                alert(data.message);
+            });
+
+            socket.on('conversation_history', (data) => {
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML = '';
+                data.messages.forEach(msg => {
+                    messagesDiv.innerHTML += `<p><strong>${msg.sender_username}:</strong> ${msg.content}</p>`;
+                });
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            });
+
+            // Store socket in global scope for other functions to use
+            window.chatSocket = socket;
+        }
+
+        function sendMessage() {
+            const receiver = document.getElementById('receiver').value;
+            const message = document.getElementById('message').value;
+            
+            if (!receiver || !message) {
+                alert('Please enter both recipient and message');
+                return;
+            }
+
+            window.chatSocket.emit('send_message', {
+                receiver_username: receiver,
+                message: message
+            });
+            
+            document.getElementById('message').value = '';
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+        }
+
+        // Handle enter key in message input
+        document.getElementById('message').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Load conversation history when recipient is selected
+        document.getElementById('receiver').addEventListener('change', (e) => {
+            const username = e.target.value;
+            window.chatSocket.emit('get_conversation', { username: username });
+        });
+
+        // Start the authentication check when page loads
+        checkAuth();
+    </script>
+</body>
+</html>
